@@ -50,14 +50,19 @@ function rewriteMpd(
 	// Rewrite a URL or template that may contain $...$ variables. Resolve the
 	// whole template against the upstream base (treating $vars as literal path
 	// characters) to form an absolute upstream URL, then proxy it. The proxied
-	// codec percent-encodes `$` to `%24`, which would stop the player from
-	// substituting $RepresentationID$ / $Number$, so restore the literal `$`
-	// afterwards. `$` only appears in these templates as a variable marker.
+	// codec percent-encodes `$` to `%24` and `%` to `%25`, which would corrupt
+	// DASH template variables ($Number%05d$ -> %24Number%2505d%24) so the player
+	// could no longer recognize or substitute them. Restore both `%24` -> `$`
+	// and `%25` -> `%` so the template syntax survives intact. The Crunchyroll
+	// signed-token query (exp=...~acl=...~hmac=...) contains no `%` or `$`, so
+	// this restore is safe here.
 	const rewriteTemplate = (raw: string): string => {
 		if (!raw || /^(blob|data|urn):/.test(raw)) return raw;
 		try {
 			const absolute = new URL(raw, upstreamBase).href;
-			return rewriteUrl(absolute, context, meta).replace(/%24/g, "$");
+			return rewriteUrl(absolute, context, meta)
+				.replace(/%24/g, "$")
+				.replace(/%25/g, "%");
 		} catch {
 			return raw;
 		}
