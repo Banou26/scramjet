@@ -16,32 +16,6 @@ import {
 } from "@/shared";
 import { sniffEncoding } from "@/shared/sniffEncoding";
 import { _TextDecoder } from "@/shared/snapshot";
-import { rewriteUrl } from "@rewriters/url";
-
-const DASH_MIME = "application/dash+xml";
-
-/**
- * Rewrite <BaseURL> contents inside a DASH MPD manifest so media segments route
- * back through the proxy. Without this the player reads the raw <BaseURL>
- * (often a different CDN origin) and fetches segments directly, bypassing the
- * proxy and stalling on cross-origin requests. BaseURL may be relative or
- * absolute; relative ones resolve against the (already proxied) manifest URL.
- */
-function rewriteMpd(
-	mpd: string,
-	context: ScramjetFetchHandler["context"],
-	meta: ScramjetFetchParsed["meta"]
-): string {
-	return mpd.replace(
-		/(<BaseURL>)([\s\S]*?)(<\/BaseURL>)/g,
-		(match, open, url, close) => {
-			const trimmed = url.trim();
-			// leave protocol-relative-free schemes and empty entries alone
-			if (!trimmed || /^(blob|data|urn):/.test(trimmed)) return match;
-			return open + rewriteUrl(trimmed, context, meta) + close;
-		}
-	);
-}
 
 export async function rewriteBody(
 	handler: ScramjetFetchHandler,
@@ -49,16 +23,6 @@ export async function rewriteBody(
 	parsed: ScramjetFetchParsed,
 	response: BareResponse
 ): Promise<BodyType> {
-	// DASH MPD manifests need their <BaseURL> rewritten regardless of how the
-	// player fetched them (xhr/fetch have an empty destination).
-	const contentType = response.headers.get("content-type") ?? "";
-	if (
-		contentType.toLowerCase().includes(DASH_MIME) ||
-		parsed.url.pathname.endsWith(".mpd")
-	) {
-		return rewriteMpd(await response.text(), handler.context, parsed.meta);
-	}
-
 	switch (parsed.destination) {
 		case "iframe":
 		case "document":
