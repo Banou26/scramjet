@@ -476,7 +476,11 @@ export function rewriteSrcset(
 	context: ScramjetContext,
 	meta: URLMeta
 ) {
-	const sources = srcset.split(/ .*,/).map((src) => src.trim());
+	// Split candidates on commas that terminate a candidate: either at the
+	// end of the string or followed by whitespace before the next candidate.
+	// Commas inside a URL (e.g. /imgsrv/format=auto,width=960/...) are always
+	// followed by more URL characters and must not be split on.
+	const sources = srcset.split(/,(?=\s|$)/).map((src) => src.trim());
 	const rewrittenSources = sources.map((source) => {
 		// Split into URLs and descriptors (if any)
 		// e.g. url0, url1 1.5x, url2 2x
