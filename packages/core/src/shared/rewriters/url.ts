@@ -166,6 +166,18 @@ export function rewriteUrl(
 			return url;
 		}
 
+		// Already-proxied URLs (they carry the proxy prefix and an encoded
+		// upstream URL) must pass through untouched. Rewriting them again
+		// produces a proxy-of-a-proxy URL whose unrewritten form points back at
+		// the proxy origin and trips the same-origin guard. This happens with
+		// DASH segment URLs: the MPD rewriter emits absolute proxied segment
+		// templates, the player substitutes $RepresentationID$/$Number$ and then
+		// hands the URL back to a rewritten fetch/XHR, which would otherwise
+		// re-encode it.
+		if (realUrl.href.startsWith(context.prefix.href)) {
+			return realUrl.href;
+		}
+
 		const encodedHash = context.interface.codecEncode(realUrl.hash.slice(1));
 		const realHash = encodedHash ? "#" + encodedHash : "";
 		realUrl.hash = "";

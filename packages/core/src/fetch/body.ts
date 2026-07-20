@@ -58,8 +58,20 @@ function rewriteMpd(
 	// this restore is safe here.
 	const rewriteTemplate = (raw: string): string => {
 		if (!raw || /^(blob|data|urn):/.test(raw)) return raw;
+		// Skip URLs that are already proxied (they carry the proxy prefix and an
+		// encoded upstream URL). Resolving and rewriting them again would
+		// double-encode the proxy path, producing a URL whose unrewritten form
+		// points back at the proxy origin and trips the same-origin guard.
+		if (
+			raw.startsWith(context.prefix.href) ||
+			raw.startsWith(context.prefix.pathname)
+		)
+			return raw;
 		try {
 			const absolute = new URL(raw, upstreamBase).href;
+			// The resolution can also produce an already-proxied absolute URL when
+			// the template is relative to a BaseURL we already rewrote.
+			if (absolute.startsWith(context.prefix.href)) return absolute;
 			return rewriteUrl(absolute, context, meta)
 				.replace(/%24/g, "$")
 				.replace(/%25/g, "%");
@@ -70,7 +82,16 @@ function rewriteMpd(
 
 	let out = mpd;
 
-	// <BaseURL>...</BaseURL> -> proxied CDN base (absolute, no variables)
+	// <BaseURL>...</BaseURL> -> upstream ABSOLUTE base (NOT proxied). The segment
+	// templates below are already rewritten to absolute proxied URLs, so the
+	// player never needs to resolve against BaseURL for them. Rewriting BaseURL
+	// to a proxied URL is what caused double-encoding: the player resolves the
+	// (already proxied) template against the proxied BaseURL, and scramjet then
+	// re-encodes the result, producing a proxy-of-a-proxy URL that unrewrites to
+	// the proxy origin and trips the same-origin guard. Keeping BaseURL as the
+	// upstream absolute URL (resolving any relative BaseURL against the manifest
+	// URL) makes it a harmless, correctly-formed base for anything the player
+	// still resolves against it.
 	out = out.replace(
 		/(<BaseURL>)([\s\S]*?)(<\/BaseURL>)/g,
 		(match, open, url, close) => {
@@ -78,7 +99,7 @@ function rewriteMpd(
 			if (!trimmed) return match;
 			try {
 				const absolute = new URL(trimmed, meta.base.href).href;
-				return open + rewriteUrl(absolute, context, meta) + close;
+				return open + absolute + close;
 			} catch {
 				return match;
 			}

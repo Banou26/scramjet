@@ -844,6 +844,34 @@ where
 				}
 			}
 		}
+
+		// `delete obj.parent` (and other unsafe-global member keys) must NOT have
+		// its property key virtualized to `$scramjet__parent`. The matching
+		// assignment `obj.$scramjet__parent = x` writes through the virtual setter
+		// to the *real* `parent` property, so a virtualized `delete
+		// obj.$scramjet__parent` removes a property that was never set and leaves
+		// the real `parent` behind. Bitmovin's MPD parser relies on
+		// `delete node.parent` to break cyclic parent links before recursively
+		// normalizing the manifest; leaving the link causes unbounded recursion
+		// (RangeError: Maximum call stack size exceeded) and the source never
+		// reaches DRM setup. Deleting the real property is always safe: it never
+		// escapes the proxy, it just removes an own data property.
+		if matches!(it.operator, UnaryOperator::Delete) {
+			match &it.argument {
+				Expression::StaticMemberExpression(member) => {
+					// walk the object only; leave the property key (and the delete
+					// target) untouched so `delete obj.parent` deletes `parent`.
+					walk::walk_expression(self, &member.object);
+					return;
+				}
+				Expression::ComputedMemberExpression(member) => {
+					walk::walk_expression(self, &member.object);
+					walk::walk_expression(self, &member.expression);
+					return;
+				}
+				_ => {}
+			}
+		}
 		walk::walk_unary_expression(self, it);
 	}
 
