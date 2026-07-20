@@ -8,7 +8,15 @@ export default function (client: ScramjetClient) {
 		apply(ctx) {
 			const url = ctx.call();
 			if (url.startsWith("blob:")) {
-				ctx.return(rewriteBlob(url, client.context, client.meta));
+				// MediaSource object urls must stay on the real creating origin.
+				// The media engine resolves them natively and a service worker
+				// cannot intercept MSE, so rewriting the origin would detach the
+				// MediaSource from the video element and stall playback.
+				if (client.box.instanceof(ctx.args[0], "MediaSource")) {
+					ctx.return(url);
+				} else {
+					ctx.return(rewriteBlob(url, client.context, client.meta));
+				}
 			} else {
 				ctx.return(url);
 			}
@@ -26,7 +34,12 @@ export default function (client: ScramjetClient) {
 				// simple delay is enough
 				// TODO: find a way to make this not necessary
 				const url = String(ctx.args[0]);
-				ctx.args[0] = unrewriteBlob(url, client.context, client.meta);
+				// Only unrewrite urls that were actually rewritten onto the
+				// page origin. MediaSource object urls are left untouched by
+				// createObjectURL and must be revoked as-is.
+				if (url.startsWith("blob:" + client.meta.origin.origin)) {
+					ctx.args[0] = unrewriteBlob(url, client.context, client.meta);
+				}
 				ctx.call();
 			}, 1000);
 			ctx.return(undefined);
