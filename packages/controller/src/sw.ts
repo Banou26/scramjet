@@ -171,14 +171,17 @@ export async function route(event: FetchEvent): Promise<Response> {
 
 		const rawheaders: RawHeaders = [...event.request.headers];
 
-		// Firefox does not reliably make a service-worker request's ReadableStream
-		// body transferable through a MessagePort, which silently drops POST/PUT
-		// payloads. Materialize the body into an ArrayBuffer (which transfers
-		// reliably) whenever there is one. GET/HEAD have no body.
+		// Firefox reports a service-worker request's `Request.body` as nullish even
+		// though the payload is present, and a ReadableStream body does not transfer
+		// reliably through the MessagePort RPC channel, silently dropping POST/PUT
+		// payloads. Fall back to materializing the body into an ArrayBuffer (which
+		// transfers reliably) only when the stream is unavailable, preserving
+		// streaming where the engine supports it. GET/HEAD have no body.
 		const body =
-			event.request.method !== "GET" && event.request.method !== "HEAD"
+			event.request.body ??
+			(event.request.method !== "GET" && event.request.method !== "HEAD"
 				? await event.request.arrayBuffer()
-				: null;
+				: null);
 
 		const response = await tab.rpc.call(
 			"request",
@@ -196,7 +199,9 @@ export async function route(event: FetchEvent): Promise<Response> {
 				rawClientUrl: client ? client.url : undefined,
 				clientId: event.clientId || event.resultingClientId,
 			},
-			body && body.byteLength > 0 ? [body] : undefined
+			body instanceof ReadableStream || body instanceof ArrayBuffer
+				? [body]
+				: undefined
 		);
 
 		return new Response(response.body, {
