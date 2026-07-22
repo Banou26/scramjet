@@ -123,6 +123,15 @@ export function rewriteRequestHeaders(
 ): ScramjetHeaders {
 	const headers = request.initialHeaders.clone();
 
+	// The transport fetch (libcurl/epoxy) is responsible for decoding the body,
+	// but it does not reliably decompress every encoded response (notably some
+	// gzip bodies under Firefox, which surface as NS_ERROR_INVALID_CONTENT_ENCODING
+	// and break JSON API responses such as crunchyroll's auth token). Chrome's
+	// service worker already strips Accept-Encoding, so requests it forwards are
+	// served identity. Forward an explicit `identity` so every browser gets an
+	// unencoded body the client can consume directly.
+	headers.set("Accept-Encoding", "identity");
+
 	// avoid leaking the scramjet referer
 	headers.delete("Referer");
 
