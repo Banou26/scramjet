@@ -19,6 +19,7 @@ import {
 	type ScramjetInterface,
 	type TrackedHistoryState,
 	Plugin,
+	SCRAMJETCLIENT,
 } from "@mercuryworkshop/scramjet";
 import { CONTROLLERFRAME } from "./symbols";
 import type {
@@ -786,6 +787,8 @@ export class Frame {
 		this.id = makeId();
 		this.prefix = this.controller.prefix + this.id + "/";
 
+		const frameElement = this.element;
+
 		this.fetchHandler = new ScramjetFetchHandler({
 			crossOriginIsolated: self.crossOriginIsolated,
 			context: this.context,
@@ -801,7 +804,30 @@ export class Frame {
 				);
 			},
 			async fetchBlobUrl(url) {
-				return BareResponse.fromNativeResponse(await fetch(url));
+				// The blob is registered in the frame that created it, and the
+				// rewritten url carries that frame's site origin. A fetch from the
+				// top window cannot resolve it in every browser (Firefox rejects a
+				// blob url whose origin does not match the storage partition of the
+				// fetching context), so the blob must be read from inside the frame.
+				// The frame's own window.fetch is hooked and would rewrite the url
+				// back through the service worker (looping), so use the frame
+				// client's captured native fetch instead. The body is buffered and
+				// reparented into this realm because a stream from the frame's
+				// realm cannot be structured-cloned back to the service worker.
+				const win = frameElement.contentWindow;
+				const frameClient = win?.[SCRAMJETCLIENT];
+				const nativeFetch: typeof fetch | undefined =
+					frameClient?.natives?.store?.["fetch"];
+				const fetcher = nativeFetch ? nativeFetch.bind(win) : fetch;
+				const frameResp = await fetcher(url);
+				const body = await frameResp.arrayBuffer();
+				return BareResponse.fromNativeResponse(
+					new Response(body, {
+						status: frameResp.status,
+						statusText: frameResp.statusText,
+						headers: frameResp.headers,
+					})
+				);
 			},
 			async fetchDataUrl(url) {
 				return BareResponse.fromNativeResponse(await fetch(url));

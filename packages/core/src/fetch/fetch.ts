@@ -267,6 +267,12 @@ async function handleBlobOrDataUrlFetch(
 	}
 	const headers = ScramjetHeaders.fromRawHeaders(response.rawHeaders);
 
+	// The body was rewritten above, so its length no longer matches the blob's
+	// original content-length. A stale content-length makes the browser read a
+	// truncated body (for a worker destination this surfaces as an empty worker
+	// source), so drop it and let the response length be derived from the body.
+	headers.delete("content-length");
+
 	// blob urls actually *can* set charsets, so we need to normalize them if it goes down the html path
 	normalizeContentType(parsed, headers);
 
