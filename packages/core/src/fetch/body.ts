@@ -15,10 +15,73 @@ import {
 	rewriteWorkers,
 } from "@/shared";
 import { sniffEncoding } from "@/shared/sniffEncoding";
-import { _TextDecoder } from "@/shared/snapshot";
+import { Number_parseInt, _TextDecoder, _URL } from "@/shared/snapshot";
 import { rewriteUrl } from "@rewriters/url";
 
 const DASH_MIME = "application/dash+xml";
+
+// Decode only XML syntax characters; leave values with other entities untouched.
+function decodeXmlValue(value: string): string | null {
+	let supported = true;
+	const decoded = value.replace(
+		/&([^\s&<>;]+);/gu,
+		(reference, entity) => {
+			switch (entity) {
+				case "amp":
+					return "&";
+				case "apos":
+					return "'";
+				case "gt":
+					return ">";
+				case "lt":
+					return "<";
+				case "quot":
+					return "\"";
+			}
+
+			if (entity.startsWith("#")) {
+				const hexadecimal = entity[1] === "x";
+				const codePoint = Number_parseInt(
+					entity.slice(hexadecimal ? 2 : 1),
+					hexadecimal ? 16 : 10
+				);
+				switch (codePoint) {
+					case 0x22:
+						return "\"";
+					case 0x26:
+						return "&";
+					case 0x27:
+						return "'";
+					case 0x3c:
+						return "<";
+					case 0x3e:
+						return ">";
+				}
+			}
+
+			supported = false;
+			return reference;
+		}
+	);
+	return supported ? decoded : null;
+}
+
+function encodeXmlValue(value: string): string {
+	return value.replace(/[&<>"']/g, (character) => {
+		switch (character) {
+			case "&":
+				return "&amp;";
+			case "<":
+				return "&lt;";
+			case ">":
+				return "&gt;";
+			case "\"":
+				return "&quot;";
+			default:
+				return "&apos;";
+		}
+	});
+}
 
 /**
  * Rewrite DASH MPD manifests so media segment requests route back through the
@@ -45,7 +108,9 @@ function rewriteMpd(
 ): string {
 	// The first <BaseURL> is the document base for relative resolution.
 	const baseMatch = mpd.match(/<BaseURL>([\s\S]*?)<\/BaseURL>/);
-	const upstreamBase = baseMatch ? baseMatch[1].trim() : meta.base.href;
+	const upstreamBase = baseMatch
+		? (decodeXmlValue(baseMatch[1]) ?? baseMatch[1]).trim()
+		: meta.base.href;
 
 	// Rewrite a URL or template that may contain $...$ variables. Resolve the
 	// whole template against the upstream base (treating $vars as literal path
@@ -68,7 +133,7 @@ function rewriteMpd(
 		)
 			return raw;
 		try {
-			const absolute = new URL(raw, upstreamBase).href;
+			const absolute = new _URL(raw, upstreamBase).href;
 			// The resolution can also produce an already-proxied absolute URL when
 			// the template is relative to a BaseURL we already rewrote.
 			if (absolute.startsWith(context.prefix.href)) return absolute;
@@ -95,11 +160,13 @@ function rewriteMpd(
 	out = out.replace(
 		/(<BaseURL>)([\s\S]*?)(<\/BaseURL>)/g,
 		(match, open, url, close) => {
-			const trimmed = url.trim();
+			const decoded = decodeXmlValue(url);
+			if (decoded === null) return match;
+			const trimmed = decoded.trim();
 			if (!trimmed) return match;
 			try {
-				const absolute = new URL(trimmed, meta.base.href).href;
-				return open + absolute + close;
+				const absolute = new _URL(trimmed, meta.base.href).href;
+				return open + encodeXmlValue(absolute) + close;
 			} catch {
 				return match;
 			}
@@ -109,7 +176,11 @@ function rewriteMpd(
 	// initialization="..." and media="..." segment templates -> proxied absolute
 	out = out.replace(
 		/((?:initialization|media)=")([^"]+)(")/g,
-		(match, pre, url, post) => pre + rewriteTemplate(url) + post
+		(match, pre, url, post) => {
+			const decoded = decodeXmlValue(url);
+			if (decoded === null) return match;
+			return pre + encodeXmlValue(rewriteTemplate(decoded)) + post;
+		}
 	);
 
 	return out;

@@ -149,6 +149,103 @@ export default [
 		},
 	}),
 
+	serverTest({
+		name: "regression-dash-xml-url-entities",
+		scramjetOnly: true,
+		async start(server, port) {
+			server.on("request", (req, res) => {
+				const url = new URL(req.url ?? "/", `http://localhost:${port}`);
+				if (url.pathname === "/") {
+					res.writeHead(200, { "Content-Type": "text/html" });
+					res.end(`
+						<!doctype html>
+						<script>
+							runTest(async () => {
+								const source = await fetch("/manifest.mpd").then((response) => response.text());
+								assert(!source.includes("%26amp%3B"), "XML entities leaked into the proxy URL");
+
+								const xml = new DOMParser().parseFromString(source, "application/xml");
+								assert(!xml.querySelector("parsererror"), "rewritten MPD is not valid XML");
+								const bases = xml.querySelectorAll("BaseURL");
+								assertEqual(
+									bases[0].textContent,
+									"http://localhost:${port}/cdn/?Policy=base&Key-Pair-Id=base-key&Signature=base-signature"
+								);
+								assertEqual(
+									bases[1].textContent,
+									"https://cdn.example/?token=custom-value"
+								);
+
+								const templates = xml.querySelectorAll("SegmentTemplate");
+								const media = templates[0].getAttribute("media");
+								const initialization = templates[0].getAttribute("initialization");
+								assert(media.includes("/~/sj/"), "media template was not rewritten through Scramjet");
+								assert(initialization.includes("/~/sj/"), "initialization URL was not rewritten through Scramjet");
+								assert(media.includes("$Number%05d$"), "DASH number template was changed");
+								const controlMedia = templates[1].getAttribute("media");
+								assertEqual(controlMedia.charCodeAt(controlMedia.indexOf(",") + 2), 0xd);
+								assertEqual(
+									templates[2].getAttribute("media"),
+									"data:text/plain,custom-value"
+								);
+
+								const requests = [
+									[
+										media.replace("$Number%05d$", "00001"),
+										"/cdn/segment-00001.m4s",
+										{ Policy: "media", "Key-Pair-Id": "media-key", Signature: "media-signature" },
+									],
+									[
+										initialization,
+										"/cdn/init.mp4",
+										{ Policy: "init", "Key-Pair-Id": "init-key", Signature: "init-signature" },
+									],
+								];
+								for (const [requestUrl, expectedPath, expectedQuery] of requests) {
+									const observed = await fetch(requestUrl).then((response) =>
+										response.json()
+									);
+									assertEqual(observed.path, expectedPath);
+									assertDeepEqual(observed.keys, ["Policy", "Key-Pair-Id", "Signature"]);
+									assertDeepEqual(observed.query, expectedQuery);
+									assert(
+										!observed.keys.some((key) => key.startsWith("amp;")),
+										"XML entity prefix reached the server"
+									);
+								}
+
+								pass("DASH XML URL entities decoded before rewriting");
+							});
+						</script>
+					`);
+					return;
+				}
+
+				if (url.pathname === "/manifest.mpd") {
+					res.writeHead(200, { "Content-Type": "application/dash+xml" });
+					res.end(`<!DOCTYPE MPD [<!ENTITY é "custom-value">]><MPD><BaseURL>http://localhost:${port}/cdn/?Policy=base&amp;Key-Pair-Id=base-key&amp;Signature=base-signature</BaseURL><Period><AdaptationSet><Representation><SegmentTemplate media="segment-$Number%05d$.m4s?Policy=media&amp;Key-Pair-Id=media-key&amp;Signature=media-signature" initialization="init.mp4?Policy=init&#38;Key-Pair-Id=init-key&#x26;Signature=init-signature"/></Representation><Representation><SegmentTemplate media="data:text/plain,a&#xD;b"/></Representation><Representation><BaseURL>https://cdn.example/?token=&é;</BaseURL><SegmentTemplate media="data:text/plain,&é;"/></Representation></AdaptationSet></Period></MPD>`);
+					return;
+				}
+
+				if (
+					url.pathname.startsWith("/cdn/segment-") ||
+					url.pathname === "/cdn/init.mp4"
+				) {
+					res.writeHead(200, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({
+						path: url.pathname,
+						keys: [...url.searchParams.keys()],
+						query: Object.fromEntries(url.searchParams.entries()),
+					}));
+					return;
+				}
+
+				res.writeHead(404);
+				res.end("not found");
+			});
+		},
+	}),
+
 	// scramjet/core/rewriter
 	// non-computed keys of a destructured objects were wrapped with $scramjet$prop, causing invalid syntax
 	// fixed by https://github.com/HeyPuter/browser.js/commit/7d4be594f2c49a447252e0a520ff0e144bef28b2
